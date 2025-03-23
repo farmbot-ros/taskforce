@@ -19,21 +19,22 @@ class Bidder {
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
     rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr auction_end_publisher_;
-    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer;
+    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_;
 
   public:
     ~Bidder() {}
     Bidder(rclcpp::Node::SharedPtr node) : node(node) {
         auction_publisher_ = node->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
         bid_subscriber_ = node->create_subscription<farmbot_interfaces::msg::Bid>(
-            "/job/bid", 10, std::bind(&Bidder::bid_callback, this, std::placeholders::_1));
+            "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
         job_publisher_ = node->create_publisher<farmbot_interfaces::msg::Job>("/job/job", 10);
         auction_end_publisher_ = node->create_publisher<std_msgs::msg::Bool>("/job/auction_end", 10);
-        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::anounce_auction, this));
-        job_timer = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
+        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
+        job_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
     }
 
-    void anounce_auction() {
+    void open_auction() {
+        RCLCPP_INFO_ONCE(node->get_logger(), "~<>~---->> Opening  auction <<----~<>~");
         RCLCPP_INFO_ONCE(node->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
         farmbot_interfaces::msg::Auction auction;
         auction.timestamp = rclcpp::Time(0);
@@ -47,12 +48,12 @@ class Bidder {
         auction_publisher_->publish(auction);
         bid_count--;
         if (bid_count <= 0) {
-            RCLCPP_INFO(node->get_logger(), "-------->> Bidding finished <<--------");
+            RCLCPP_INFO_ONCE(node->get_logger(), "~<>~---->> Bidding finished <<----~<>~");
             auction_timer_->cancel();
         }
     }
 
-    void bid_callback(const farmbot_interfaces::msg::Bid::SharedPtr msg) {
+    void recieve_bids(const farmbot_interfaces::msg::Bid::SharedPtr msg) {
         if (msg->auction_id != auction_id) {
             return;
         }
@@ -97,8 +98,8 @@ class Bidder {
         job.agents = partakers;
         job_publisher_->publish(job);
         if (bid_count <= -10) {
-            RCLCPP_INFO(node->get_logger(), "-------->> Job sent <<--------");
-            job_timer->cancel();
+            RCLCPP_INFO_ONCE(node->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
+            job_timer_->cancel();
         }
     }
 
