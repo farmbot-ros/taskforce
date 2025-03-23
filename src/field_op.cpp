@@ -12,7 +12,7 @@ class Bidder {
   private:
     rclcpp::Node::SharedPtr node;
     std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
-    int32_t bid_count = 30;
+    int32_t bid_count = 20;
     std::string auction_id = "1234567890";
 
     rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
@@ -71,14 +71,17 @@ class Bidder {
     }
 
     void assign_job() {
-        if (agents.empty() || bid_count <= 0) {
+        bid_count--;
+        if (agents.empty() || bid_count >= 0) {
             return;
         }
+        std::vector<farmbot_interfaces::msg::Agent> partakers;
         // auto agent = agents[randomAgentIndex];
         int highest_bidder = 0;
         farmbot_interfaces::msg::Agent highest_bidder_agent;
 
         for (uint i = 0; i < agents.size(); i++) {
+            partakers.push_back(agents[i].first);
             if (agents[i].second > highest_bidder) {
                 highest_bidder_agent = agents[i].first;
             }
@@ -91,10 +94,10 @@ class Bidder {
         job.job_id = "1234567890";
         job.agent = highest_bidder_agent;
         job.auction_id = auction_id;
+        job.agents = partakers;
         job_publisher_->publish(job);
-        bid_count--;
         if (bid_count <= -10) {
-            RCLCPP_INFO(node->get_logger(), "-------->> Job finished <<--------");
+            RCLCPP_INFO(node->get_logger(), "-------->> Job sent <<--------");
             job_timer->cancel();
         }
     }
