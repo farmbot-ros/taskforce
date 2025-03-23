@@ -27,7 +27,7 @@ install(
 )
 
 set(executables
-    tasker
+    field_op
 )
 
 find_package(ament_cmake REQUIRED)
