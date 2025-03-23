@@ -11,7 +11,7 @@ using namespace std::chrono_literals;
 class Bidder {
   private:
     rclcpp::Node::SharedPtr node;
-    farmbot_interfaces::msg::Agents participants;
+    std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
     int32_t bid_count = 30;
     std::string auction_id = "1234567890";
 
@@ -19,7 +19,7 @@ class Bidder {
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
     rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr auction_end_publisher_;
-    rclcpp::TimerBase::SharedPtr timer_publisher_;
+    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer;
 
   public:
     ~Bidder() {}
@@ -29,11 +29,12 @@ class Bidder {
             "/job/bid", 10, std::bind(&Bidder::bid_callback, this, std::placeholders::_1));
         job_publisher_ = node->create_publisher<farmbot_interfaces::msg::Job>("/job/job", 10);
         auction_end_publisher_ = node->create_publisher<std_msgs::msg::Bool>("/job/auction_end", 10);
-        timer_publisher_ = node->create_wall_timer(1s, std::bind(&Bidder::test_auction, this));
+        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::anounce_auction, this));
+        job_timer = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
     }
 
-    void test_auction() {
-        RCLCPP_INFO(node->get_logger(), "Sending test auction");
+    void anounce_auction() {
+        RCLCPP_INFO_ONCE(node->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
         farmbot_interfaces::msg::Auction auction;
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test";
@@ -46,8 +47,8 @@ class Bidder {
         auction_publisher_->publish(auction);
         bid_count--;
         if (bid_count <= 0) {
-            RCLCPP_INFO(node->get_logger(), "-------- Bidding finished ----------");
-            timer_publisher_->cancel();
+            RCLCPP_INFO(node->get_logger(), "-------->> Bidding finished <<--------");
+            auction_timer_->cancel();
         }
     }
 
@@ -55,14 +56,47 @@ class Bidder {
         if (msg->auction_id != auction_id) {
             return;
         }
-        for (const auto &agent : participants.beacons) {
-            if (msg->agent.name == agent.name) {
-                return;
+
+        bool found = false;
+        for (const auto &ag : agents) {
+            if (ag.first.name == msg->agent.name) {
+                found = true;
+                break;
             }
-            RCLCPP_INFO(node->get_logger(), "%s bids %ld", msg->agent.name.c_str(), msg->bid);
-            participants.beacons.push_back(agent);
         }
-        return;
+        if (!found) {
+            RCLCPP_INFO(node->get_logger(), "Agent [%s] bid", msg->agent.name.c_str());
+            agents.push_back({msg->agent, msg->bid});
+        }
+    }
+
+    void assign_job() {
+        if (agents.empty() || bid_count <= 0) {
+            return;
+        }
+        // auto agent = agents[randomAgentIndex];
+        int highest_bidder = 0;
+        farmbot_interfaces::msg::Agent highest_bidder_agent;
+
+        for (uint i = 0; i < agents.size(); i++) {
+            if (agents[i].second > highest_bidder) {
+                highest_bidder_agent = agents[i].first;
+            }
+        }
+
+        RCLCPP_INFO_ONCE(node->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
+        farmbot_interfaces::msg::Job job;
+        job.timestamp = rclcpp::Time(0);
+        job.signature = "test";
+        job.job_id = "1234567890";
+        job.agent = highest_bidder_agent;
+        job.auction_id = auction_id;
+        job_publisher_->publish(job);
+        bid_count--;
+        if (bid_count <= -10) {
+            RCLCPP_INFO(node->get_logger(), "-------->> Job finished <<--------");
+            job_timer->cancel();
+        }
     }
 
   private:
