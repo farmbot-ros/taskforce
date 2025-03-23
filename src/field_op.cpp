@@ -79,7 +79,7 @@ class Bidder {
             }
         }
         if (!found) {
-            RCLCPP_INFO(node_->get_logger(), "Agent [%s] bid", msg->agent.name.c_str());
+            RCLCPP_INFO(node_->get_logger(), "Agent [%s] bid with [%ld] points", msg->agent.name.c_str(), msg->bid);
             agents.push_back({msg->agent, msg->bid});
         }
     }
