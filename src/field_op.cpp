@@ -10,20 +10,28 @@ using namespace std::chrono_literals;
 
 class Bidder {
   private:
-    rclcpp::Node::SharedPtr node;
+    rclcpp::Node::SharedPtr node_;
+    std::string geojson_file_;
+    double vehicle_coverage_, path_angle_;
     std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
     int32_t bid_count = 20;
     std::string auction_id = "1234567890";
+    farmbot_interfaces::msg::KeyValue kv;
 
     rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
     rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr auction_end_publisher_;
-    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_;
+    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_, close_timer_;
 
   public:
     ~Bidder() {}
-    Bidder(rclcpp::Node::SharedPtr node) : node(node) {
+    Bidder(rclcpp::Node::SharedPtr node) : node_(node) {
+
+        vehicle_coverage_ = node_->get_parameter_or<double>("vehicle_coverage", 3.0);
+        path_angle_ = node_->get_parameter_or<double>("path_angle", 90);
+        geojson_file_ = node_->get_parameter_or<std::string>("geojson_file", "field.geojson");
+
         auction_publisher_ = node->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
         bid_subscriber_ = node->create_subscription<farmbot_interfaces::msg::Bid>(
             "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
@@ -31,24 +39,31 @@ class Bidder {
         auction_end_publisher_ = node->create_publisher<std_msgs::msg::Bool>("/job/auction_end", 10);
         auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
         job_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
+        close_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
     }
 
+  private:
     void open_auction() {
-        RCLCPP_INFO_ONCE(node->get_logger(), "~<>~---->> Opening  auction <<----~<>~");
-        RCLCPP_INFO_ONCE(node->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
+        RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Opening  auction <<----~<>~");
+        RCLCPP_INFO_ONCE(node_->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
         farmbot_interfaces::msg::Auction auction;
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test";
         auction.auction_id = auction_id;
-        auction.job_type = "harvest";
-        farmbot_interfaces::msg::KeyValue kv;
+        auction.job_type = "abliner";
         kv.key = "geojson_file";
-        kv.value = "/doc/code/farmbot/src/trailblazer/config/field4.geojson";
+        kv.value = geojson_file_;
+        auction.parameters.push_back(kv);
+        kv.key = "vehicle_coverage";
+        kv.value = std::to_string(vehicle_coverage_);
+        auction.parameters.push_back(kv);
+        kv.key = "path_angle";
+        kv.value = std::to_string(path_angle_);
         auction.parameters.push_back(kv);
         auction_publisher_->publish(auction);
         bid_count--;
         if (bid_count <= 0) {
-            RCLCPP_INFO_ONCE(node->get_logger(), "~<>~---->> Bidding finished <<----~<>~");
+            RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Bidding finished <<----~<>~");
             auction_timer_->cancel();
         }
     }
@@ -66,7 +81,7 @@ class Bidder {
             }
         }
         if (!found) {
-            RCLCPP_INFO(node->get_logger(), "Agent [%s] bid", msg->agent.name.c_str());
+            RCLCPP_INFO(node_->get_logger(), "Agent [%s] bid", msg->agent.name.c_str());
             agents.push_back({msg->agent, msg->bid});
         }
     }
@@ -88,7 +103,7 @@ class Bidder {
             }
         }
 
-        RCLCPP_INFO_ONCE(node->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
+        RCLCPP_INFO_ONCE(node_->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
         farmbot_interfaces::msg::Job job;
         job.timestamp = rclcpp::Time(0);
         job.signature = "test";
@@ -98,12 +113,19 @@ class Bidder {
         job.agents = partakers;
         job_publisher_->publish(job);
         if (bid_count <= -10) {
-            RCLCPP_INFO_ONCE(node->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
+            RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
+            bid_count = 0;
             job_timer_->cancel();
         }
     }
-
-  private:
+    void close_auction() {
+        bid_count--;
+        if (bid_count <= -10) {
+            // close node
+            RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Closing  auction <<----~<>~");
+            rclcpp::shutdown();
+        }
+    }
 };
 
 int main(int argc, char *argv[]) {
@@ -122,6 +144,6 @@ int main(int argc, char *argv[]) {
     } catch (const std::exception &e) {
         return 1;
     }
-    rclcpp::shutdown();
+    // rclcpp::shutdown();
     return 0;
 }
