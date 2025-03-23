@@ -6,15 +6,18 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 
+using namespace std::chrono_literals;
+
 class Bidder {
   private:
     rclcpp::Node::SharedPtr node;
+    farmbot_interfaces::msg::KeyValue kv;
 
     rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
     rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr auction_end_publisher_;
-    farmbot_interfaces::msg::KeyValue kv;
+    rclcpp::TimerBase::SharedPtr auction_timer_;
 
   public:
     ~Bidder() {}
@@ -24,6 +27,7 @@ class Bidder {
             "/job/bid", 10, std::bind(&Bidder::bid_callback, this, std::placeholders::_1));
         job_publisher_ = node->create_publisher<farmbot_interfaces::msg::Job>("/job/job", 10);
         auction_end_publisher_ = node->create_publisher<std_msgs::msg::Bool>("/job/auction_end", 10);
+        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::test_auction, this));
     }
 
     void bid_callback(const farmbot_interfaces::msg::Bid::SharedPtr msg) {
@@ -64,7 +68,6 @@ int main(int argc, char *argv[]) {
 
     rclcpp::Node::SharedPtr node1 = rclcpp::Node::make_shared("tasker", options);
     std::shared_ptr<Bidder> taskerrr = std::make_shared<Bidder>(node1);
-    taskerrr->test_auction();
 
     try {
         executor.add_node(node1);
