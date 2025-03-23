@@ -21,7 +21,6 @@ class Bidder {
     rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
     rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr auction_end_publisher_;
     rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_, close_timer_;
 
   public:
@@ -36,7 +35,6 @@ class Bidder {
         bid_subscriber_ = node->create_subscription<farmbot_interfaces::msg::Bid>(
             "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
         job_publisher_ = node->create_publisher<farmbot_interfaces::msg::Job>("/job/job", 10);
-        auction_end_publisher_ = node->create_publisher<std_msgs::msg::Bool>("/job/auction_end", 10);
         auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
         job_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
         close_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
@@ -48,7 +46,7 @@ class Bidder {
         RCLCPP_INFO_ONCE(node_->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
         farmbot_interfaces::msg::Auction auction;
         auction.timestamp = rclcpp::Time(0);
-        auction.signature = "test";
+        auction.signature = "test"; // TODO: generate signature
         auction.auction_id = auction_id;
         auction.job_type = "abliner";
         kv.key = "geojson_file";
@@ -106,7 +104,7 @@ class Bidder {
         RCLCPP_INFO_ONCE(node_->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
         farmbot_interfaces::msg::Job job;
         job.timestamp = rclcpp::Time(0);
-        job.signature = "test";
+        job.signature = "test"; // TODO: generate signature
         job.job_id = "1234567890";
         job.agent = highest_bidder_agent;
         job.auction_id = auction_id;
