@@ -109,6 +109,17 @@ class Bidder {
         job.agent = highest_bidder_agent;
         job.auction_id = auction_id;
         job.agents = partakers;
+
+        kv.key = "geojson_file";
+        kv.value = geojson_file_;
+        job.parameters.push_back(kv);
+        kv.key = "vehicle_coverage";
+        kv.value = std::to_string(vehicle_coverage_);
+        job.parameters.push_back(kv);
+        kv.key = "path_angle";
+        kv.value = std::to_string(path_angle_);
+        job.parameters.push_back(kv);
+
         job_publisher_->publish(job);
         if (bid_count <= -10) {
             RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
