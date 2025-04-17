@@ -27,6 +27,7 @@ install(
 )
 
 set(executables
+    field_gen
     field_op
 )
 
