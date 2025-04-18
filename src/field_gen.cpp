@@ -146,7 +146,7 @@ class FieldGen : public farmbot::AuctionNodeBase {
 
     void close_auction() override {
         bid_count_--;
-        if (bid_count_ <= -10) {
+        if (bid_count_ <= -5) {
             // close node
             RCLCPP_INFO_ONCE(node_->get_logger(), "%s", decorate("Closing  auction"));
             rclcpp::shutdown();

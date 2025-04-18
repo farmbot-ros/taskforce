@@ -16,86 +16,45 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "auction_node_interface.hpp"
+
 using namespace std::chrono_literals;
 
-template <typename T> T deserialize(const std::vector<uint8_t> &blob) {
-    rmw_serialized_message_t cmsg = rmw_get_zero_initialized_serialized_message();
-    rcutils_allocator_t alloc = rcutils_get_default_allocator();
-    if (rmw_serialized_message_init(&cmsg, blob.size(), &alloc) != RMW_RET_OK) {
-        std::cerr << "Failed to initialize serialized message" << std::endl;
-    }
-    memcpy(cmsg.buffer, blob.data(), blob.size());
-    cmsg.buffer_length = blob.size();
-    rclcpp::SerializedMessage serialized(cmsg);
-    rclcpp::Serialization<T> serializer;
-    T msg;
-    serializer.deserialize_message(&serialized, &msg);
-    return msg;
-}
-
-class FieldOp {
+class FieldOp : public farmbot::AuctionNodeBase {
   private:
-    rclcpp::Node::SharedPtr node_;
     std::string geojson_file_;
-    std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
-    int32_t bid_count = 20;
-    std::string auction_id = "1111111111";
-    farmbot_interfaces::msg::KeyValue kv;
-
-    rclcpp::CallbackGroup::SharedPtr callback_group;
-    rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
-    rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
-    rclcpp::Client<farmbot_interfaces::srv::Job>::SharedPtr job_assigner_;
-    rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_, close_timer_;
 
   public:
     ~FieldOp() {}
-    FieldOp(rclcpp::Node::SharedPtr node) : node_(node) {
-
+    FieldOp(rclcpp::Node::SharedPtr node) : AuctionNodeBase(node, 10, "1111111111") {
         geojson_file_ = node_->get_parameter_or<std::string>("geojson_file", "field.geojson");
-
-        callback_group = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-
-        // setup auction
-        auction_setup();
-    }
-
-    void auction_setup() {
-        auction_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::open_auction, this));
-        auction_publisher_ = node_->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
-        bid_subscriber_ = node_->create_subscription<farmbot_interfaces::msg::Bid>(
-            "/job/bid", 10, std::bind(&FieldOp::recieve_bids, this, std::placeholders::_1));
-        job_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::assign_job, this), callback_group);
-        close_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::close_auction, this));
     }
 
   private:
-    void open_auction() {
-        RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Opening  auction <<----~<>~");
-        RCLCPP_INFO_ONCE(node_->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count);
+    void open_auction() override {
+        RCLCPP_INFO_ONCE(node_->get_logger(), "%s", decorate("Opening  auction"));
+        RCLCPP_INFO_ONCE(node_->get_logger(), "Calling for auction and waiting for %ds for bidders", bid_count_);
         farmbot_interfaces::msg::Auction auction;
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test"; // TODO: generate signature
-        auction.auction_id = auction_id;
+        auction.auction_id = auction_id_;
         auction.job_type = "field_op";
-        kv.key = "geojson_file";
-        kv.value = geojson_file_;
-        auction.parameters.push_back(kv);
+        keyval.key = "geojson_file";
+        keyval.value = geojson_file_;
+        auction.parameters.push_back(keyval);
         auction_publisher_->publish(auction);
-        bid_count--;
-        if (bid_count <= 0) {
-            RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Bidding finished <<----~<>~");
+        if (bid_count_ <= 0) {
+            RCLCPP_INFO_ONCE(node_->get_logger(), "%s", decorate("Bidding finished"));
             auction_timer_->cancel();
         }
     }
 
-    void recieve_bids(const farmbot_interfaces::msg::Bid::SharedPtr msg) {
-        if (msg->auction_id != auction_id) {
+    void recieve_bids(const farmbot_interfaces::msg::Bid::SharedPtr msg) override {
+        if (msg->auction_id != auction_id_) {
             return;
         }
-
         bool found = false;
-        for (const auto &ag : agents) {
+        for (const auto &ag : agents_) {
             if (ag.first.name == msg->agent.name) {
                 found = true;
                 break;
@@ -103,13 +62,12 @@ class FieldOp {
         }
         if (!found) {
             RCLCPP_INFO(node_->get_logger(), "Agent [%s] bid with [%ld] points", msg->agent.name.c_str(), msg->bid);
-            agents.push_back({msg->agent, msg->bid});
+            agents_.push_back({msg->agent, msg->bid});
         }
     }
 
-    void assign_job() {
-        bid_count--;
-        if (agents.empty() || bid_count >= 0) {
+    void assign_job() override {
+        if (agents_.empty() || bid_count_ >= 0) {
             return;
         }
         std::vector<farmbot_interfaces::msg::Agent> partakers;
@@ -117,10 +75,10 @@ class FieldOp {
         int highest_bidder = 0;
         farmbot_interfaces::msg::Agent highest_bidder_agent;
 
-        for (uint i = 0; i < agents.size(); i++) {
-            partakers.push_back(agents[i].first);
-            if (agents[i].second > highest_bidder) {
-                highest_bidder_agent = agents[i].first;
+        for (uint i = 0; i < agents_.size(); i++) {
+            partakers.push_back(agents_[i].first);
+            if (agents_[i].second > highest_bidder) {
+                highest_bidder_agent = agents_[i].first;
             }
         }
 
@@ -132,12 +90,12 @@ class FieldOp {
         job.signature = "test"; // TODO: generate signature
         job.job_id = "1111111111";
         job.agent = highest_bidder_agent;
-        job.auction_id = auction_id;
+        job.auction_id = auction_id_;
         job.agents = partakers;
 
-        kv.key = "geojson_file";
-        kv.value = geojson_file_;
-        job.parameters.push_back(kv);
+        keyval.key = "geojson_file";
+        keyval.value = geojson_file_;
+        job.parameters.push_back(keyval);
 
         auto job_send_request = std::make_shared<farmbot_interfaces::srv::Job::Request>();
         job_send_request->the_job = job;
@@ -158,14 +116,14 @@ class FieldOp {
             RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
             return;
         }
-        RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
+        RCLCPP_INFO_ONCE(node_->get_logger(), "%s", decorate("Job sent"));
 
         job_timer_->cancel();
     }
 
-    void close_auction() {
-        bid_count--;
-        if (bid_count <= -10) {
+    void close_auction() override {
+        bid_count_--;
+        if (bid_count_ <= -5) {
             // close node
             RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~---->> Closing  auction <<----~<>~");
             rclcpp::shutdown();
