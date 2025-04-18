@@ -2,13 +2,38 @@
 #include "farmbot_interfaces/msg/agents.hpp"
 #include "farmbot_interfaces/msg/auction.hpp"
 #include "farmbot_interfaces/msg/bid.hpp"
+#include "farmbot_interfaces/msg/field.hpp"
 #include "farmbot_interfaces/msg/job.hpp"
+#include "farmbot_interfaces/srv/job.hpp"
+
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/serialization.hpp>
+#include <rclcpp/serialized_message.hpp>
+#include <rcutils/allocator.h>
+#include <rmw/serialized_message.h>
 #include <std_msgs/msg/bool.hpp>
+
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 using namespace std::chrono_literals;
 
-class Bidder {
+template <typename T> T deserialize(const std::vector<uint8_t> &blob) {
+    rmw_serialized_message_t cmsg = rmw_get_zero_initialized_serialized_message();
+    rcutils_allocator_t alloc = rcutils_get_default_allocator();
+    if (rmw_serialized_message_init(&cmsg, blob.size(), &alloc) != RMW_RET_OK) {
+        std::cerr << "Failed to initialize serialized message" << std::endl;
+    }
+    memcpy(cmsg.buffer, blob.data(), blob.size());
+    cmsg.buffer_length = blob.size();
+    rclcpp::SerializedMessage serialized(cmsg);
+    rclcpp::Serialization<T> serializer;
+    T msg;
+    serializer.deserialize_message(&serialized, &msg);
+    return msg;
+}
+
+class FieldOp {
   private:
     rclcpp::Node::SharedPtr node_;
     std::string geojson_file_;
@@ -18,26 +43,33 @@ class Bidder {
     std::string auction_id = "1234567890";
     farmbot_interfaces::msg::KeyValue kv;
 
+    rclcpp::CallbackGroup::SharedPtr callback_group;
     rclcpp::Publisher<farmbot_interfaces::msg::Auction>::SharedPtr auction_publisher_;
     rclcpp::Subscription<farmbot_interfaces::msg::Bid>::SharedPtr bid_subscriber_;
-    rclcpp::Publisher<farmbot_interfaces::msg::Job>::SharedPtr job_publisher_;
+    rclcpp::Client<farmbot_interfaces::srv::Job>::SharedPtr job_assigner_;
     rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_, close_timer_;
 
   public:
-    ~Bidder() {}
-    Bidder(rclcpp::Node::SharedPtr node) : node_(node) {
+    ~FieldOp() {}
+    FieldOp(rclcpp::Node::SharedPtr node) : node_(node) {
 
         vehicle_coverage_ = node_->get_parameter_or<double>("vehicle_coverage", 3.0);
         path_angle_ = node_->get_parameter_or<double>("path_angle", 90);
         geojson_file_ = node_->get_parameter_or<std::string>("geojson_file", "field.geojson");
 
-        auction_publisher_ = node->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
-        bid_subscriber_ = node->create_subscription<farmbot_interfaces::msg::Bid>(
-            "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
-        job_publisher_ = node->create_publisher<farmbot_interfaces::msg::Job>("/job/job", 10);
-        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
-        job_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this));
-        close_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
+        callback_group = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+
+        // setup auction
+        auction_setup();
+    }
+
+    void auction_setup() {
+        auction_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::open_auction, this));
+        auction_publisher_ = node_->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
+        bid_subscriber_ = node_->create_subscription<farmbot_interfaces::msg::Bid>(
+            "/job/bid", 10, std::bind(&FieldOp::recieve_bids, this, std::placeholders::_1));
+        job_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::assign_job, this), callback_group);
+        close_timer_ = node_->create_wall_timer(1s, std::bind(&FieldOp::close_auction, this));
     }
 
   private:
@@ -48,7 +80,7 @@ class Bidder {
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test"; // TODO: generate signature
         auction.auction_id = auction_id;
-        auction.job_type = "abliner";
+        auction.job_type = "field_gen";
         kv.key = "geojson_file";
         kv.value = geojson_file_;
         auction.parameters.push_back(kv);
@@ -101,6 +133,9 @@ class Bidder {
             }
         }
 
+        job_assigner_ =
+            node_->create_client<farmbot_interfaces::srv::Job>(highest_bidder_agent.name + "/job/field_gen");
+
         RCLCPP_INFO_ONCE(node_->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
         farmbot_interfaces::msg::Job job;
         job.timestamp = rclcpp::Time(0);
@@ -120,13 +155,35 @@ class Bidder {
         kv.value = std::to_string(path_angle_);
         job.parameters.push_back(kv);
 
-        job_publisher_->publish(job);
-        if (bid_count <= -10) {
-            RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
-            bid_count = 0;
-            job_timer_->cancel();
+        auto job_send_request = std::make_shared<farmbot_interfaces::srv::Job::Request>();
+        job_send_request->the_job = job;
+        while (!job_assigner_->wait_for_service(1s)) {
+            if (!rclcpp::ok()) {
+                RCLCPP_ERROR(node_->get_logger(), "Interrupted while waiting for the service. Exiting.");
+                return;
+            }
+            RCLCPP_INFO(node_->get_logger(), "Service not available, waiting again...");
         }
+        auto job_future = job_assigner_->async_send_request(job_send_request);
+        while (rclcpp::ok() && job_future.wait_for(1s) == std::future_status::timeout) {
+            RCLCPP_INFO(node_->get_logger(), "Waiting for response from Job service...");
+        }
+        auto job_result = job_future.get();
+
+        if (job_result->type != "json/Field") {
+            RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
+            return;
+        }
+        RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
+
+        nlohmann::json gsn = nlohmann::json::from_cbor(job_result->data);
+        std::ofstream dfile("/tmp/field.geojson");
+        dfile.write(gsn.dump(4).c_str(), gsn.dump(4).size());
+        dfile.close();
+
+        job_timer_->cancel();
     }
+
     void close_auction() {
         bid_count--;
         if (bid_count <= -10) {
@@ -144,8 +201,8 @@ int main(int argc, char *argv[]) {
     options.allow_undeclared_parameters(true);
     options.automatically_declare_parameters_from_overrides(true);
 
-    rclcpp::Node::SharedPtr node1 = rclcpp::Node::make_shared("tasker", options);
-    std::shared_ptr<Bidder> taskerrr = std::make_shared<Bidder>(node1);
+    rclcpp::Node::SharedPtr node1 = rclcpp::Node::make_shared("field_op", options);
+    std::shared_ptr<FieldOp> taskerrr = std::make_shared<FieldOp>(node1);
 
     try {
         executor.add_node(node1);

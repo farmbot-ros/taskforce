@@ -33,10 +33,10 @@ template <typename T> T deserialize(const std::vector<uint8_t> &blob) {
     return msg;
 }
 
-class Bidder {
+class FieldGen {
   private:
     rclcpp::Node::SharedPtr node_;
-    std::string geojson_file_;
+    std::string geojson_file_, output_file_;
     double vehicle_coverage_, path_angle_;
     std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
     int32_t bid_count = 20;
@@ -50,12 +50,13 @@ class Bidder {
     rclcpp::TimerBase::SharedPtr auction_timer_, job_timer_, close_timer_;
 
   public:
-    ~Bidder() {}
-    Bidder(rclcpp::Node::SharedPtr node) : node_(node) {
+    ~FieldGen() {}
+    FieldGen(rclcpp::Node::SharedPtr node) : node_(node) {
 
         vehicle_coverage_ = node_->get_parameter_or<double>("vehicle_coverage", 3.0);
         path_angle_ = node_->get_parameter_or<double>("path_angle", 90);
         geojson_file_ = node_->get_parameter_or<std::string>("geojson_file", "field.geojson");
+        output_file_ = node_->get_parameter_or<std::string>("output_file", "/tmp/field.geojson");
 
         callback_group = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
@@ -64,12 +65,12 @@ class Bidder {
     }
 
     void auction_setup() {
-        auction_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
+        auction_timer_ = node_->create_wall_timer(1s, std::bind(&FieldGen::open_auction, this));
         auction_publisher_ = node_->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
         bid_subscriber_ = node_->create_subscription<farmbot_interfaces::msg::Bid>(
-            "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
-        job_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::assign_job, this), callback_group);
-        close_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
+            "/job/bid", 10, std::bind(&FieldGen::recieve_bids, this, std::placeholders::_1));
+        job_timer_ = node_->create_wall_timer(1s, std::bind(&FieldGen::assign_job, this), callback_group);
+        close_timer_ = node_->create_wall_timer(1s, std::bind(&FieldGen::close_auction, this));
     }
 
   private:
@@ -177,7 +178,8 @@ class Bidder {
         RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
 
         nlohmann::json gsn = nlohmann::json::from_cbor(job_result->data);
-        std::ofstream dfile("/tmp/field.geojson");
+        std::ofstream dfile(output_file_);
+        RCLCPP_INFO(node_->get_logger(), "Writing field to %s", output_file_.c_str());
         dfile.write(gsn.dump(4).c_str(), gsn.dump(4).size());
         dfile.close();
 
@@ -201,8 +203,8 @@ int main(int argc, char *argv[]) {
     options.allow_undeclared_parameters(true);
     options.automatically_declare_parameters_from_overrides(true);
 
-    rclcpp::Node::SharedPtr node1 = rclcpp::Node::make_shared("tasker", options);
-    std::shared_ptr<Bidder> taskerrr = std::make_shared<Bidder>(node1);
+    rclcpp::Node::SharedPtr node1 = rclcpp::Node::make_shared("field_gen", options);
+    std::shared_ptr<FieldGen> taskerrr = std::make_shared<FieldGen>(node1);
 
     try {
         executor.add_node(node1);
