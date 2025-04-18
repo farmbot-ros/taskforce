@@ -13,6 +13,9 @@
 #include <rmw/serialized_message.h>
 #include <std_msgs/msg/bool.hpp>
 
+#include <fstream>
+#include <nlohmann/json.hpp>
+
 using namespace std::chrono_literals;
 
 template <typename T> T deserialize(const std::vector<uint8_t> &blob) {
@@ -56,12 +59,17 @@ class Bidder {
 
         callback_group = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-        auction_publisher_ = node->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
-        bid_subscriber_ = node->create_subscription<farmbot_interfaces::msg::Bid>(
+        // setup auction
+        auction_setup();
+    }
+
+    void auction_setup() {
+        auction_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
+        auction_publisher_ = node_->create_publisher<farmbot_interfaces::msg::Auction>("/job/auction", 10);
+        bid_subscriber_ = node_->create_subscription<farmbot_interfaces::msg::Bid>(
             "/job/bid", 10, std::bind(&Bidder::recieve_bids, this, std::placeholders::_1));
-        auction_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::open_auction, this));
-        job_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::assign_job, this), callback_group);
-        close_timer_ = node->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
+        job_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::assign_job, this), callback_group);
+        close_timer_ = node_->create_wall_timer(1s, std::bind(&Bidder::close_auction, this));
     }
 
   private:
@@ -72,7 +80,7 @@ class Bidder {
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test"; // TODO: generate signature
         auction.auction_id = auction_id;
-        auction.job_type = "abliner";
+        auction.job_type = "field_gen";
         kv.key = "geojson_file";
         kv.value = geojson_file_;
         auction.parameters.push_back(kv);
@@ -162,15 +170,17 @@ class Bidder {
         }
         auto job_result = job_future.get();
 
-        if (job_result->type != "farmbot_interfaces/msg/Field") {
+        if (job_result->type != "json/Field") {
             RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
             return;
         }
-        farmbot_interfaces::msg::Field field = deserialize<farmbot_interfaces::msg::Field>(job_result->data);
-
         RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
-        RCLCPP_INFO(node_->get_logger(), "Border received: %lu", field.border.lines.size());
-        RCLCPP_INFO(node_->get_logger(), "Swaths received: %lu", field.swaths.lines.size());
+
+        nlohmann::json gsn = nlohmann::json::from_cbor(job_result->data);
+        std::ofstream dfile("/tmp/field.geojson");
+        dfile.write(gsn.dump(4).c_str(), gsn.dump(4).size());
+        dfile.close();
+
         job_timer_->cancel();
     }
 
