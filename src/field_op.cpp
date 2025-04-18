@@ -37,10 +37,9 @@ class FieldOp {
   private:
     rclcpp::Node::SharedPtr node_;
     std::string geojson_file_;
-    double vehicle_coverage_, path_angle_;
     std::vector<std::pair<farmbot_interfaces::msg::Agent, int>> agents;
     int32_t bid_count = 20;
-    std::string auction_id = "1234567890";
+    std::string auction_id = "1111111111";
     farmbot_interfaces::msg::KeyValue kv;
 
     rclcpp::CallbackGroup::SharedPtr callback_group;
@@ -53,8 +52,6 @@ class FieldOp {
     ~FieldOp() {}
     FieldOp(rclcpp::Node::SharedPtr node) : node_(node) {
 
-        vehicle_coverage_ = node_->get_parameter_or<double>("vehicle_coverage", 3.0);
-        path_angle_ = node_->get_parameter_or<double>("path_angle", 90);
         geojson_file_ = node_->get_parameter_or<std::string>("geojson_file", "field.geojson");
 
         callback_group = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -80,15 +77,9 @@ class FieldOp {
         auction.timestamp = rclcpp::Time(0);
         auction.signature = "test"; // TODO: generate signature
         auction.auction_id = auction_id;
-        auction.job_type = "field_gen";
+        auction.job_type = "field_op";
         kv.key = "geojson_file";
         kv.value = geojson_file_;
-        auction.parameters.push_back(kv);
-        kv.key = "vehicle_coverage";
-        kv.value = std::to_string(vehicle_coverage_);
-        auction.parameters.push_back(kv);
-        kv.key = "path_angle";
-        kv.value = std::to_string(path_angle_);
         auction.parameters.push_back(kv);
         auction_publisher_->publish(auction);
         bid_count--;
@@ -133,26 +124,19 @@ class FieldOp {
             }
         }
 
-        job_assigner_ =
-            node_->create_client<farmbot_interfaces::srv::Job>(highest_bidder_agent.name + "/job/field_gen");
+        job_assigner_ = node_->create_client<farmbot_interfaces::srv::Job>(highest_bidder_agent.name + "/job/field_op");
 
         RCLCPP_INFO_ONCE(node_->get_logger(), "Job assigned to [%s]", highest_bidder_agent.name.c_str());
         farmbot_interfaces::msg::Job job;
         job.timestamp = rclcpp::Time(0);
         job.signature = "test"; // TODO: generate signature
-        job.job_id = "1234567890";
+        job.job_id = "1111111111";
         job.agent = highest_bidder_agent;
         job.auction_id = auction_id;
         job.agents = partakers;
 
         kv.key = "geojson_file";
         kv.value = geojson_file_;
-        job.parameters.push_back(kv);
-        kv.key = "vehicle_coverage";
-        kv.value = std::to_string(vehicle_coverage_);
-        job.parameters.push_back(kv);
-        kv.key = "path_angle";
-        kv.value = std::to_string(path_angle_);
         job.parameters.push_back(kv);
 
         auto job_send_request = std::make_shared<farmbot_interfaces::srv::Job::Request>();
@@ -170,7 +154,7 @@ class FieldOp {
         }
         auto job_result = job_future.get();
 
-        if (job_result->type != "json/Field") {
+        if (job_result->type != "json/FieldOp") {
             RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
             return;
         }

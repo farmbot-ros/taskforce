@@ -171,7 +171,7 @@ class FieldGen {
         }
         auto job_result = job_future.get();
 
-        if (job_result->type != "json/Field") {
+        if (job_result->type != "json/FieldGen") {
             RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
             return;
         }
