@@ -160,11 +160,6 @@ class FieldOp {
         }
         RCLCPP_INFO_ONCE(node_->get_logger(), "~<>~-------->> Job sent <<--------~<>~");
 
-        nlohmann::json gsn = nlohmann::json::from_cbor(job_result->data);
-        std::ofstream dfile("/tmp/field.geojson");
-        dfile.write(gsn.dump(4).c_str(), gsn.dump(4).size());
-        dfile.close();
-
         job_timer_->cancel();
     }
 
