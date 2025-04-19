@@ -112,7 +112,7 @@ class FieldOp : public farmbot::AuctionNodeBase {
         }
         auto job_result = job_future.get();
 
-        if (job_result->type != "json/FieldOp") {
+        if (job_result->type != "farmbot_interfaces/Fields") {
             RCLCPP_ERROR(node_->get_logger(), "Job service did not match Field type");
             return;
         }

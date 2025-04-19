@@ -2,7 +2,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-namespace farmbot {
+namespace serde {
     template <typename T> T deserialize(const std::vector<uint8_t> &blob) {
         rmw_serialized_message_t cmsg = rmw_get_zero_initialized_serialized_message();
         rcutils_allocator_t alloc = rcutils_get_default_allocator();
